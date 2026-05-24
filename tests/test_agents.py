@@ -272,3 +272,56 @@ class TestOrchestrator:
         orch = _make_orchestrator()
         result = orch.analyze("contract")
         assert result["findings_count"] == len(result["total_findings"])
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator + VectorStore integration
+# ---------------------------------------------------------------------------
+
+class TestOrchestratorRAG:
+    def test_vectorstore_injected_into_all_agents(self):
+        mock_vs = MagicMock()
+        with patch("agents.base_agent.Anthropic"), patch("orchestrator.orchestrator.Anthropic"):
+            orch = Orchestrator(vectorstore=mock_vs)
+
+        assert orch.legal_agent.vectorstore is mock_vs
+        assert orch.financial_agent.vectorstore is mock_vs
+        assert orch.practical_agent.vectorstore is mock_vs
+
+    def test_analyze_calls_rag_method_when_vectorstore_provided(self):
+        mock_vs = MagicMock()
+        with patch("agents.base_agent.Anthropic"), patch("orchestrator.orchestrator.Anthropic"):
+            orch = Orchestrator(vectorstore=mock_vs)
+
+        orch.legal_agent = MagicMock()
+        orch.legal_agent.analyze_structured_with_rag.return_value = _agent_payload("legal", 6)
+        orch.financial_agent = MagicMock()
+        orch.financial_agent.analyze_structured_with_rag.return_value = _agent_payload("financial", 4)
+        orch.practical_agent = MagicMock()
+        orch.practical_agent.analyze_structured_with_rag.return_value = _agent_payload("practical", 3)
+        orch.client = MagicMock()
+        orch.client.messages.create.return_value = _mock_response("Summary.")
+
+        orch.analyze("contract text")
+
+        orch.legal_agent.analyze_structured_with_rag.assert_called_once_with("contract text")
+        orch.financial_agent.analyze_structured_with_rag.assert_called_once_with("contract text")
+        orch.practical_agent.analyze_structured_with_rag.assert_called_once_with("contract text")
+
+    def test_analyze_uses_plain_structured_when_no_vectorstore(self):
+        with patch("agents.base_agent.Anthropic"), patch("orchestrator.orchestrator.Anthropic"):
+            orch = Orchestrator()  # no vectorstore
+
+        orch.legal_agent = MagicMock()
+        orch.legal_agent.analyze_structured.return_value = _agent_payload("legal", 5)
+        orch.financial_agent = MagicMock()
+        orch.financial_agent.analyze_structured.return_value = _agent_payload("financial", 3)
+        orch.practical_agent = MagicMock()
+        orch.practical_agent.analyze_structured.return_value = _agent_payload("practical", 2)
+        orch.client = MagicMock()
+        orch.client.messages.create.return_value = _mock_response("Summary.")
+
+        orch.analyze("contract text")
+
+        orch.legal_agent.analyze_structured.assert_called_once_with("contract text")
+        orch.legal_agent.analyze_structured_with_rag.assert_not_called()

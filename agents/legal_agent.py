@@ -18,6 +18,10 @@ below potential harm, one-sided indemnification clauses
 Scoring guide for risk_score (0–10):
 0–2: minor or no issues  |  3–4: low risk  |  5–6: moderate  |  7–8: high  |  9–10: critical
 
+If the input contains a "REFERENCE LEGAL TEXT" section, use those normative references to \
+validate findings and add a "legal_citations" field to each relevant finding. Cite only text \
+that actually appears in the reference section. Omit legal_citations when no reference applies.
+
 Respond ONLY with a valid JSON object matching this exact schema (no markdown, no code fences):
 {
   "agent_type": "legal",
@@ -28,7 +32,8 @@ Respond ONLY with a valid JSON object matching this exact schema (no markdown, n
       "title": "<concise problem title>",
       "description": "<detailed explanation of why this clause is risky>",
       "clause_reference": "<exact quote or close paraphrase of the problematic text>",
-      "recommendation": "<concrete action the signing party should take>"
+      "recommendation": "<concrete action the signing party should take>",
+      "legal_citations": [{"source": "<filename>", "excerpt": "<quote from reference>"}]
     }
   ],
   "summary": "<2-3 sentence overall assessment of legal risks in this contract>"

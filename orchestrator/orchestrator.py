@@ -23,20 +23,30 @@ _EXECUTIVE_SUMMARY_SYSTEM = (
 
 
 class Orchestrator:
-    def __init__(self):
+    def __init__(self, vectorstore=None):
         self.legal_agent = LegalAgent()
         self.financial_agent = FinancialAgent()
         self.practical_agent = PracticalAgent()
         self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        self.vectorstore = vectorstore
+
+        if vectorstore is not None:
+            for agent in (self.legal_agent, self.financial_agent, self.practical_agent):
+                agent.set_vectorstore(vectorstore)
 
     def analyze(self, contract_text: str) -> dict:
         """
         Run all three agents sequentially, then synthesize a final report.
-        Returns a dict with overall_risk_score, sorted findings, and executive_summary.
+        Uses RAG-augmented analysis when a vectorstore is available.
         """
-        legal = self.legal_agent.analyze_structured(contract_text)
-        financial = self.financial_agent.analyze_structured(contract_text)
-        practical = self.practical_agent.analyze_structured(contract_text)
+        if self.vectorstore is not None:
+            legal = self.legal_agent.analyze_structured_with_rag(contract_text)
+            financial = self.financial_agent.analyze_structured_with_rag(contract_text)
+            practical = self.practical_agent.analyze_structured_with_rag(contract_text)
+        else:
+            legal = self.legal_agent.analyze_structured(contract_text)
+            financial = self.financial_agent.analyze_structured(contract_text)
+            practical = self.practical_agent.analyze_structured(contract_text)
 
         agent_results = [legal, financial, practical]
 
