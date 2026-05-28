@@ -39,3 +39,6 @@ htmlcov/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Personal notes (not for public repo)
+NOTES.local.md
