@@ -72,9 +72,25 @@ def get_vectorstore() -> "VectorStore | None":
         return None
     try:
         vs = VectorStore()
+        # Probe the collection immediately — raises if chroma_db was rebuilt
+        # while the cache was alive, so we fail fast here rather than mid-analysis
+        vs.collection.count()
         return vs if vs.is_indexed() else None
     except Exception:
         return None
+
+
+def _safe_vectorstore() -> "VectorStore | None":
+    """Return a working VectorStore, clearing the cache if the stored one is stale."""
+    vs = get_vectorstore()
+    if vs is None:
+        return None
+    try:
+        vs.collection.count()  # probe: raises if collection UUID no longer exists
+        return vs
+    except Exception:
+        get_vectorstore.clear()
+        return get_vectorstore()
 
 
 # ---------------------------------------------------------------------------
@@ -85,21 +101,21 @@ def render_sidebar() -> None:
     with st.sidebar:
         st.markdown("## ⚖️ AI Contract\nRed-Teamer")
         st.markdown(
-            "Carica un contratto PDF. Tre agenti AI lo analizzano in sequenza "
-            "e producono un risk report con score **0–10**."
+            "Upload a PDF contract. Three AI agents analyze it in sequence "
+            "and produce a risk report with score **0–10**."
         )
         st.markdown(f"[📦 GitHub]({GITHUB_URL})", unsafe_allow_html=False)
 
-        gdpr_path = Path(__file__).parent / "rag" / "documents" / "CELEX_32016R0679_IT_TXT.pdf"
+        gdpr_path = Path(__file__).parent / "rag" / "documents" / "CELEX_32016R0679_EN_TXT.pdf"
         if gdpr_path.exists():
-            vs = get_vectorstore()
-            rag_label = "✅ RAG attivo" if vs else "⚠️ RAG non indicizzato"
+            vs = _safe_vectorstore()
+            rag_label = "✅ RAG active" if vs else "⚠️ RAG not indexed"
             st.markdown("---")
-            st.caption(f"📄 GDPR (Reg. UE 2016/679)\n{rag_label}")
+            st.caption(f"📄 GDPR (EU Reg. 2016/679)\n{rag_label}")
 
         if "report" in st.session_state:
             st.markdown("---")
-            if st.button("🔄 Nuova analisi", use_container_width=True):
+            if st.button("🔄 New analysis", use_container_width=True):
                 for key in ("report", "analyzing", "contract_text"):
                     st.session_state.pop(key, None)
                 st.rerun()
@@ -112,38 +128,38 @@ def render_sidebar() -> None:
 def render_upload_state() -> None:
     st.title("⚖️ AI Contract Red-Teamer")
     st.markdown(
-        "Carica un **PDF** di contratto o Termini di Servizio. "
-        "Tre agenti specializzati identificano clausole pericolose, "
-        "ambiguità e trappole — prima che tu firmi."
+        "Upload a **PDF** contract or Terms of Service. "
+        "Three specialized agents identify dangerous clauses, "
+        "ambiguities, and hidden traps — before you sign."
     )
 
     missing = [k for k in ("ANTHROPIC_API_KEY",) if not os.getenv(k)]
     if missing:
         st.error(
-            f"⚠️ Variabili d'ambiente mancanti: `{', '.join(missing)}`.\n\n"
-            "Crea un file `.env` con le API key richieste (vedi `.env.example`)."
+            f"⚠️ Missing environment variables: `{', '.join(missing)}`.\n\n"
+            "Create a `.env` file with the required API keys (see `.env.example`)."
         )
         return
 
     st.markdown("---")
-    tab_pdf, tab_sample = st.tabs(["📄 Carica PDF", "📋 Contratto d'esempio"])
+    tab_pdf, tab_sample = st.tabs(["📄 Upload PDF", "📋 Sample contract"])
 
     with tab_pdf:
         uploaded = st.file_uploader(
-            "Seleziona un file PDF",
+            "Select a PDF file",
             type=["pdf"],
-            help="Supporta contratti, ToS, NDA, accordi commerciali.",
+            help="Supports contracts, ToS, NDAs, and commercial agreements.",
         )
 
         if uploaded:
-            st.caption(f"File selezionato: **{uploaded.name}** ({uploaded.size // 1024} KB)")
+            st.caption(f"Selected file: **{uploaded.name}** ({uploaded.size // 1024} KB)")
 
         st.info(
-            "ℹ️ L'analisi richiede circa 30–60 secondi e consuma ~$0.10 di API.",
+            "ℹ️ Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.",
         )
 
         if st.button(
-            "🔍 Analizza contratto",
+            "🔍 Analyze contract",
             type="primary",
             disabled=uploaded is None,
             use_container_width=True,
@@ -152,34 +168,33 @@ def render_upload_state() -> None:
                 tmp.write(uploaded.read())
                 tmp_path = tmp.name
             try:
-                text = extract_text_from_pdf(tmp_path)
+                text, was_truncated = extract_text_from_pdf(tmp_path)
             except Exception as e:
-                st.error(f"Errore nella lettura del PDF: {e}")
+                st.error(f"PDF read error: {e}")
                 return
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
 
             if not text.strip():
-                st.error("Nessun testo estratto dal PDF. Il file potrebbe essere scansionato o protetto.")
+                st.error("No text extracted from PDF. The file may be scanned or password-protected.")
                 return
 
-            page_count = text.count("\f") + 1
-            if page_count > 50:
-                st.warning(f"Il PDF ha ~{page_count} pagine. L'analisi potrebbe essere incompleta.")
+            if was_truncated:
+                st.info("ℹ️ Long document: analyzed the first 25,000 characters (~7 pages)")
 
             _start_analysis(text)
 
     with tab_sample:
         st.markdown(
-            "Contratto volutamente problematico per testare il sistema. "
-            "Contiene **violazioni GDPR**, penali sproporzionate e clausole capestro."
+            "A deliberately problematic contract for testing the system. "
+            "Contains **GDPR violations**, disproportionate penalties, and predatory clauses."
         )
-        with st.expander("Mostra testo del contratto d'esempio"):
+        with st.expander("Show sample contract text"):
             st.code(CONTRATTO_ESEMPIO.strip(), language="text")
 
-        st.info("ℹ️ L'analisi richiede circa 30–60 secondi e consuma ~$0.10 di API.")
+        st.info("ℹ️ Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.")
 
-        if st.button("🔍 Analizza contratto d'esempio", type="primary", use_container_width=True):
+        if st.button("🔍 Analyze sample contract", type="primary", use_container_width=True):
             _start_analysis(CONTRATTO_ESEMPIO)
 
 
@@ -200,8 +215,8 @@ def render_analyzing_state() -> None:
         st.rerun()
         return
 
-    st.title("🔍 Analisi in corso...")
-    st.markdown("Gli agenti stanno esaminando il contratto. Non chiudere questa pagina.")
+    st.title("🔍 Analyzing...")
+    st.markdown("Agents are reviewing the contract. Please do not close this page.")
 
     progress = st.progress(0)
 
@@ -211,12 +226,12 @@ def render_analyzing_state() -> None:
     p_prac    = st.empty()
     p_summary = st.empty()
 
-    p_text.markdown("✅ Testo estratto e pronto")
+    p_text.markdown("✅ Text extracted")
     progress.progress(10)
 
-    vs = get_vectorstore()
+    vs = _safe_vectorstore()
     if vs is None and os.getenv("VOYAGE_API_KEY"):
-        st.caption("⚠️ RAG non disponibile — analisi senza citazioni normative GDPR.")
+        st.caption("⚠️ RAG unavailable — analysis without GDPR normative references.")
 
     def analyze(agent):
         if vs:
@@ -226,28 +241,28 @@ def render_analyzing_state() -> None:
     try:
         orchestrator = Orchestrator(vectorstore=vs)
 
-        p_legal.markdown("⏳ **Legal Agent** — analisi clausole legali...")
+        p_legal.markdown("⏳ **Legal Agent** — analyzing legal clauses...")
         legal = analyze(orchestrator.legal_agent)
         p_legal.markdown(
-            f"✅ **Legal Agent** completato — score: **{legal.get('risk_score', '?')}/10**"
+            f"✅ **Legal Agent** done — score: **{legal.get('risk_score', '?')}/10**"
         )
         progress.progress(40)
 
-        p_fin.markdown("⏳ **Financial Agent** — analisi costi e penali...")
+        p_fin.markdown("⏳ **Financial Agent** — analyzing financial clauses...")
         financial = analyze(orchestrator.financial_agent)
         p_fin.markdown(
-            f"✅ **Financial Agent** completato — score: **{financial.get('risk_score', '?')}/10**"
+            f"✅ **Financial Agent** done — score: **{financial.get('risk_score', '?')}/10**"
         )
         progress.progress(65)
 
-        p_prac.markdown("⏳ **Practical Agent** — analisi obblighi pratici...")
+        p_prac.markdown("⏳ **Practical Agent** — analyzing practical clauses...")
         practical = analyze(orchestrator.practical_agent)
         p_prac.markdown(
-            f"✅ **Practical Agent** completato — score: **{practical.get('risk_score', '?')}/10**"
+            f"✅ **Practical Agent** done — score: **{practical.get('risk_score', '?')}/10**"
         )
         progress.progress(85)
 
-        p_summary.markdown("⏳ **Orchestrator** — generazione executive summary...")
+        p_summary.markdown("⏳ **Orchestrator** — generating executive summary...")
         results = [legal, financial, practical]
         overall = orchestrator._weighted_score(results)
         findings = orchestrator._merge_findings(results)
@@ -263,7 +278,7 @@ def render_analyzing_state() -> None:
             "executive_summary": summary,
         }
 
-        p_summary.markdown("✅ **Executive summary** generato")
+        p_summary.markdown("✅ **Executive summary** generated")
         progress.progress(100)
 
         st.session_state.report = report
@@ -271,9 +286,9 @@ def render_analyzing_state() -> None:
         st.rerun()
 
     except Exception as exc:
-        st.error(f"❌ Errore durante l'analisi: {exc}")
-        st.markdown("Verifica le API key nel file `.env` e riprova.")
-        if st.button("↩️ Torna all'upload"):
+        st.error(f"❌ Analysis error: {exc}")
+        st.markdown("Check your API keys in the `.env` file and try again.")
+        if st.button("↩️ Back to upload"):
             st.session_state.analyzing = False
             st.rerun()
 

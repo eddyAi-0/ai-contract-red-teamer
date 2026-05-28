@@ -80,7 +80,8 @@ class VectorStore:
         if existing["ids"]:
             return 0
 
-        text = extract_text_from_pdf(pdf_path)
+        # No character limit — index the full document for maximum RAG coverage
+        text, _ = extract_text_from_pdf(pdf_path, max_chars=None)
         chunks = split_text(text)
         if not chunks:
             return 0

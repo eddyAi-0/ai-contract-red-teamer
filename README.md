@@ -2,13 +2,34 @@
 
 A multi-agent system that analyzes contracts and Terms of Service to surface dangerous clauses, ambiguities, and hidden traps — before you sign.
 
+## 📸 Demo
+
+> Tested on Spotify Terms of Service (Italian PDF) — produces a 7.7/10
+> HIGH risk report with 27 findings, citing GDPR Article 13 from
+> indexed legal sources.
+
+![Home](screenshots/01_home.png)
+*Upload a PDF contract or use the included sample.*
+
+![Analyzing](screenshots/02_analyzing.png)
+*Three specialized agents analyze the contract sequentially.*
+
+![Report](screenshots/03_report_overview.png)
+*Color-coded risk score with per-agent breakdown.*
+
+![Findings](screenshots/04_findings_list.png)
+*All findings filterable by severity and agent type.*
+
+![Finding Detail](screenshots/05_finding_expanded.png)
+*Each finding cites relevant GDPR articles from indexed legal sources.*
+
 ## Features
 
 - **PDF upload** — drag-and-drop any contract PDF directly in the browser
 - **3 specialized AI agents** — Legal, Financial, and Practical each attack the contract from a different angle
 - **Live progress UI** — watch each agent complete in real-time with scores
 - **Risk score 0–10** — color-coded (green → red) with a MINIMAL/LOW/MEDIUM/HIGH/CRITICAL label
-- **RAG-augmented analysis** — findings are cross-referenced against the GDPR text (Reg. UE 2016/679)
+- **RAG-augmented analysis** — findings are cross-referenced against the GDPR text (EU Reg. 2016/679)
 - **Filterable findings** — filter by severity (Critical/High/Medium/Low) and agent type
 - **Download report** — export as Markdown or raw JSON
 

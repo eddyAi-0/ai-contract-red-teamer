@@ -100,7 +100,7 @@ def _render_findings_section(findings: list[dict]) -> None:
     ]
 
     if not filtered:
-        st.info("Nessun finding corrisponde ai filtri selezionati.")
+        st.info("No findings match the selected filters.")
         return
 
     for finding in filtered:
@@ -120,14 +120,14 @@ def _render_finding(f: dict) -> None:
         st.markdown(f.get("description", ""))
 
         if f.get("clause_reference"):
-            st.markdown("**Clausola problematica:**")
+            st.markdown("**Problematic clause:**")
             st.markdown(
                 f'<div class="clause-quote">"{f["clause_reference"]}"</div>',
                 unsafe_allow_html=True,
             )
 
         if f.get("recommendation"):
-            st.markdown("**Raccomandazione:**")
+            st.markdown("**Recommendation:**")
             st.markdown(
                 f'<div class="recommendation-box">{f["recommendation"]}</div>',
                 unsafe_allow_html=True,
@@ -135,7 +135,7 @@ def _render_finding(f: dict) -> None:
 
         citations = f.get("legal_citations") or []
         if citations:
-            st.markdown("**Fonti normative citate:**")
+            st.markdown("**Legal references:**")
             for cit in citations:
                 source = cit.get("source", "?")
                 excerpt = cit.get("excerpt", "")
@@ -174,13 +174,13 @@ def _render_downloads(report: dict) -> None:
 
 def generate_markdown(report: dict) -> str:
     lines = [
-        "# AI Contract Red-Teamer — Analisi Report",
+        "# AI Contract Red-Teamer — Analysis Report",
         "",
-        f"## Risk Score Complessivo: {report['overall_risk_score']}/10 — {report['risk_label']}",
+        f"## Overall Risk Score: {report['overall_risk_score']}/10 — {report['risk_label']}",
         "",
-        f"**Problemi totali:** {report['findings_count']}",
+        f"**Total findings:** {report['findings_count']}",
         "",
-        "## Score per Agente",
+        "## Agent Scores",
         "",
     ]
     for agent, score in report["agent_scores"].items():
@@ -207,12 +207,12 @@ def generate_markdown(report: dict) -> str:
             "",
         ]
         if f.get("clause_reference"):
-            lines += ["**Clausola problematica:**", f'> {f["clause_reference"]}', ""]
+            lines += ["**Problematic clause:**", f'> {f["clause_reference"]}', ""]
         if f.get("recommendation"):
-            lines += ["**Raccomandazione:**", f.get("recommendation", ""), ""]
+            lines += ["**Recommendation:**", f.get("recommendation", ""), ""]
         for cit in (f.get("legal_citations") or []):
             lines += [
-                f"**Fonte:** {cit.get('source', '?')}",
+                f"**Source:** {cit.get('source', '?')}",
                 f'> {cit.get("excerpt", "")}',
                 "",
             ]

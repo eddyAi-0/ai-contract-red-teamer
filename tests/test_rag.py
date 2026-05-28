@@ -217,7 +217,7 @@ class TestIndexPdf:
         mock_collection.get.return_value = {"ids": []}
         mock_voyage.embed.return_value.embeddings = [[0.1, 0.2]] * 5
 
-        with patch("rag.vectorstore.extract_text_from_pdf", return_value="word " * 200):
+        with patch("rag.vectorstore.extract_text_from_pdf", return_value=("word " * 200, False)):
             count = vs.index_pdf("/path/gdpr.pdf", "gdpr.pdf")
 
         assert count > 0
@@ -230,7 +230,7 @@ class TestIndexPdf:
 
         with patch(
             "rag.vectorstore.extract_text_from_pdf",
-            return_value="A short text.\n\nAnother paragraph.\n\nThird paragraph here.",
+            return_value=("A short text.\n\nAnother paragraph.\n\nThird paragraph here.", False),
         ):
             vs.index_pdf("/path/contract.pdf", "contract.pdf")
 
@@ -241,7 +241,7 @@ class TestIndexPdf:
         vs, mock_collection, _ = vs_mocks
         mock_collection.get.return_value = {"ids": []}
 
-        with patch("rag.vectorstore.extract_text_from_pdf", return_value=""):
+        with patch("rag.vectorstore.extract_text_from_pdf", return_value=("", False)):
             count = vs.index_pdf("/path/empty.pdf", "empty.pdf")
 
         assert count == 0

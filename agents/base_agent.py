@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -93,7 +94,7 @@ class BaseAgent:
         for attempt, msg in enumerate(prompts):
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=self.system_prompt,
                 messages=[{"role": "user", "content": msg}],
             )
@@ -104,6 +105,9 @@ class BaseAgent:
                 lines = raw.split("\n")
                 raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
                 raw = raw.strip()
+
+            # Remove ASCII control characters (except \n, \t, \r) that break JSON parsing
+            raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
 
             try:
                 return json.loads(raw)

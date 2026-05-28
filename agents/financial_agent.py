@@ -39,7 +39,11 @@ Respond ONLY with a valid JSON object matching this exact schema (no markdown, n
     }
   ],
   "summary": "<2-3 sentence overall assessment of financial risks in this contract>"
-}"""
+}
+
+Always respond in English, regardless of the input language. Quote original clauses verbatim \
+(including their original language), but write title, description, recommendation, and summary \
+in English."""
 
 
 class FinancialAgent(BaseAgent):
