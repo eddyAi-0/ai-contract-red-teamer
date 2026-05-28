@@ -33,7 +33,17 @@ A multi-agent system that analyzes contracts and Terms of Service to surface dan
 - **Filterable findings** — filter by severity (Critical/High/Medium/Low) and agent type
 - **Download report** — export as Markdown or raw JSON
 
-## Quick Start
+## Tech Stack
+
+- **Python 3.11+**
+- **Anthropic API** (`claude-sonnet-4-5`) — direct calls, no LangChain
+- **Streamlit** — frontend with live progress UI
+- **pdfplumber** — PDF text extraction
+- **ChromaDB** — RAG vector store
+- **Voyage AI** — embeddings for semantic search
+- **python-dotenv** — environment variable management
+
+## 🚀 Quick Start
 
 ```bash
 # 1. Clone & virtual environment
@@ -57,6 +67,24 @@ streamlit run app.py
 ```
 
 Open [http://localhost:8501](http://localhost:8501) in your browser.
+
+## 🐳 Docker
+
+Run the app in a container with a single command:
+
+```bash
+# Copy and edit environment file
+cp .env.example .env
+# Add ANTHROPIC_API_KEY and VOYAGE_API_KEY to .env
+
+# Build and run
+docker-compose up --build
+```
+
+Open http://localhost:8501
+
+The GDPR vector store is persisted in a Docker volume — first run will
+take ~2 minutes to index, subsequent runs are instant.
 
 ## Architecture
 
@@ -98,16 +126,6 @@ PDF / Text Input
 | Financial | 35% |
 | Practical | 25% |
 
-## Tech Stack
-
-- **Python 3.11+**
-- **Anthropic API** (`claude-sonnet-4-5`) — direct calls, no LangChain
-- **Streamlit** — frontend with live progress UI
-- **pdfplumber** — PDF text extraction
-- **ChromaDB** — RAG vector store
-- **Voyage AI** — embeddings for semantic search
-- **python-dotenv** — environment variable management
-
 ## Project Structure
 
 ```
@@ -132,19 +150,17 @@ ai-contract-red-teamer/
 │   └── test_agents.py         # Unit tests
 ├── screenshots/               # App screenshots
 ├── app.py                     # Streamlit entry point
-├── test_end_to_end.py         # CLI end-to-end test
+├── Dockerfile
+├── docker-compose.yml
 ├── .env.example
 ├── requirements.txt
 └── README.md
 ```
-
-## Screenshots
-
-_Screenshots will be added after first run._
 
 ## Roadmap
 
 - [x] Step 1 — Project setup, BaseAgent, PDF parser
 - [x] Step 2 — Legal, Financial, Practical agents + Orchestrator + RAG
 - [x] Step 3 — Streamlit frontend with live progress and filterable report
-- [ ] Step 4 — Deploy on Streamlit Cloud
+- [x] Step 4 — Docker support for one-command deployment
+- [ ] Step 5 — Deploy on Streamlit Cloud

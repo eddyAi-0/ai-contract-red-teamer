@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Secrets
+.env
+
+# Dev tooling
+.vscode/
+.idea/
+*.egg-info/
+
+# Test suite (not needed at runtime)
+tests/
+
+# Large assets not needed at runtime
+screenshots/
+
+# ChromaDB is persisted via Docker volume — don't bake it into the image
+rag/chroma_db/
+
+# Markdown files (README.md is copied by the COPY . . above and excluded here)
+TODO.md
+CONTRIBUTING.md
+
+# Misc
+.DS_Store
