@@ -1,6 +1,8 @@
 import json
 import os
 import re
+from difflib import SequenceMatcher
+
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
@@ -15,6 +17,11 @@ _JSON_STRICT_INSTRUCTION = (
     "\n\nYOUR RESPONSE MUST BE RAW JSON ONLY. "
     "Start immediately with { and end with }. "
     "No markdown, no ```json``` blocks, no text before or after."
+)
+_AGENTIC_FINISH_INSTRUCTION = (
+    "\n\nWhen you have finished your analysis, respond with a valid JSON object only. "
+    "No markdown, no code fences. Start with { and end with }. "
+    "The JSON must contain: agent_type, risk_score (0-10), findings[], summary."
 )
 
 
@@ -76,9 +83,170 @@ class BaseAgent:
         )
         return self._analyze_json(user_message)
 
+    def analyze_agentic(self, contract_text: str, max_turns: int = 4) -> dict:
+        """
+        Agentic analysis loop with tool use.  The model can call search_legal_corpus
+        and verify_citation as many times as it needs before emitting the final JSON.
+
+        Output shape is identical to analyze_structured_with_rag so the rest of the
+        project can use either method without changes.
+
+        Falls back to analyze_structured_with_rag when max_turns is exhausted or the
+        loop produces no parseable output.
+        """
+        tools = self._define_tools()
+        messages: list[dict] = [
+            {
+                "role": "user",
+                "content": (
+                    f"Analyze the following contract text:\n\n{contract_text}\n\n"
+                    "You have two tools available:\n"
+                    "• search_legal_corpus – retrieve relevant regulatory text from the corpus.\n"
+                    "• verify_citation – confirm an excerpt actually exists before citing it.\n"
+                    "Call verify_citation for EVERY citation you plan to include and omit any "
+                    "that cannot be verified."
+                    + _AGENTIC_FINISH_INSTRUCTION
+                ),
+            }
+        ]
+
+        response = None
+        for _ in range(max_turns):
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=8192,
+                system=self.system_prompt,
+                tools=tools,
+                messages=messages,
+            )
+
+            if response.stop_reason == "end_turn":
+                text_block = next(
+                    (b for b in response.content if getattr(b, "type", None) == "text"),
+                    None,
+                )
+                if text_block:
+                    try:
+                        return self._parse_raw_to_dict(text_block.text)
+                    except (ValueError, json.JSONDecodeError):
+                        pass
+                break
+
+            if response.stop_reason == "tool_use":
+                messages.append({"role": "assistant", "content": response.content})
+                tool_results = []
+                for block in response.content:
+                    if getattr(block, "type", None) == "tool_use":
+                        result = self._execute_tool(block.name, block.input)
+                        tool_results.append(
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps(result),
+                            }
+                        )
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                # Unexpected stop reason (e.g. max_tokens) — fall through to fallback
+                break
+
+        # Loop exhausted or produced unparseable output: use single-pass RAG as fallback
+        return self.analyze_structured_with_rag(contract_text)
+
+    # ------------------------------------------------------------------
+    # Tool definitions and execution
+    # ------------------------------------------------------------------
+
+    def _define_tools(self) -> list[dict]:
+        return [
+            {
+                "name": "search_legal_corpus",
+                "description": (
+                    "Search the legal corpus for normative references, regulatory text, "
+                    "or case law relevant to a topic. Returns matching text excerpts with "
+                    "source attribution."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Natural-language query to find relevant legal text.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+            },
+            {
+                "name": "verify_citation",
+                "description": (
+                    "Verify that a specific text excerpt actually exists in the legal corpus. "
+                    "Returns {\"verified\": true} if the excerpt is found verbatim or near-verbatim, "
+                    "{\"verified\": false} otherwise. "
+                    "Always call this before including a citation in findings."
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "excerpt": {
+                            "type": "string",
+                            "description": "The exact or near-exact text excerpt to look up.",
+                        }
+                    },
+                    "required": ["excerpt"],
+                },
+            },
+        ]
+
+    def _execute_tool(self, name: str, inputs: dict) -> dict:
+        if name == "search_legal_corpus":
+            if self.vectorstore is None:
+                return {"results": []}
+            results = self.vectorstore.search(inputs.get("query", ""), top_k=3)
+            return {
+                "results": [
+                    {"source": r["source"], "text": r["text"]} for r in results
+                ]
+            }
+        if name == "verify_citation":
+            return self._verify_citation(inputs.get("excerpt", ""))
+        return {"error": f"Unknown tool: {name}"}
+
+    def _verify_citation(self, excerpt: str) -> dict:
+        """
+        Return {"verified": True} if excerpt is found in the corpus via normalised
+        substring match or SequenceMatcher ratio ≥ 0.85; False otherwise.
+
+        Using fuzzy matching because models sometimes paraphrase quotes slightly.
+        The 0.85 threshold rejects fabrications while tolerating minor whitespace /
+        punctuation differences.
+        """
+        if self.vectorstore is None:
+            return {"verified": False}
+        candidates = self.vectorstore.search(excerpt, top_k=3)
+        normalised_excerpt = " ".join(excerpt.lower().split())
+        for candidate in candidates:
+            normalised_text = " ".join(candidate["text"].lower().split())
+            if normalised_excerpt in normalised_text:
+                return {"verified": True}
+            ratio = SequenceMatcher(None, normalised_excerpt, normalised_text).ratio()
+            if ratio >= 0.85:
+                return {"verified": True}
+        return {"verified": False}
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _parse_raw_to_dict(self, raw: str) -> dict:
+        """Strip markdown fences and control characters, then JSON-parse."""
+        raw = raw.strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            raw = raw.strip()
+        raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
+        return json.loads(raw)
 
     def _analyze_json(self, user_message: str) -> dict:
         """
@@ -100,17 +268,8 @@ class BaseAgent:
             )
             raw = response.content[0].text.strip()
 
-            # Strip markdown code fences the model may add despite instructions
-            if raw.startswith("```"):
-                lines = raw.split("\n")
-                raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-                raw = raw.strip()
-
-            # Remove ASCII control characters (except \n, \t, \r) that break JSON parsing
-            raw = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", raw)
-
             try:
-                return json.loads(raw)
+                return self._parse_raw_to_dict(raw)
             except json.JSONDecodeError:
                 if attempt == len(prompts) - 1:
                     raise ValueError(

@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from agents.legal_agent import LegalAgent
 from agents.financial_agent import FinancialAgent
 from agents.practical_agent import PracticalAgent
+from agents.critic_agent import CriticAgent
 
 load_dotenv()
 
@@ -27,31 +28,33 @@ class Orchestrator:
         self.legal_agent = LegalAgent()
         self.financial_agent = FinancialAgent()
         self.practical_agent = PracticalAgent()
+        self.critic_agent = CriticAgent()
         self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self.vectorstore = vectorstore
 
         if vectorstore is not None:
-            for agent in (self.legal_agent, self.financial_agent, self.practical_agent):
+            for agent in (
+                self.legal_agent,
+                self.financial_agent,
+                self.practical_agent,
+                self.critic_agent,
+            ):
                 agent.set_vectorstore(vectorstore)
 
     def analyze(self, contract_text: str) -> dict:
         """
-        Run all three agents sequentially, then synthesize a final report.
-        Uses RAG-augmented analysis when a vectorstore is available.
+        Run all three specialist agents in agentic tool-use mode, critique the
+        merged findings, then synthesize a final report.
         """
-        if self.vectorstore is not None:
-            legal = self.legal_agent.analyze_structured_with_rag(contract_text)
-            financial = self.financial_agent.analyze_structured_with_rag(contract_text)
-            practical = self.practical_agent.analyze_structured_with_rag(contract_text)
-        else:
-            legal = self.legal_agent.analyze_structured(contract_text)
-            financial = self.financial_agent.analyze_structured(contract_text)
-            practical = self.practical_agent.analyze_structured(contract_text)
+        legal = self.legal_agent.analyze_agentic(contract_text)
+        financial = self.financial_agent.analyze_agentic(contract_text)
+        practical = self.practical_agent.analyze_agentic(contract_text)
 
         agent_results = [legal, financial, practical]
 
-        overall_risk_score = self._weighted_score(agent_results)
         total_findings = self._merge_findings(agent_results)
+        total_findings = self._critique_findings(total_findings)
+        overall_risk_score = self._weighted_score(agent_results)
         executive_summary = self._executive_summary(agent_results, overall_risk_score)
 
         return {
@@ -63,6 +66,16 @@ class Orchestrator:
             "agent_summaries": {r["agent_type"]: r.get("summary", "") for r in agent_results},
             "executive_summary": executive_summary,
         }
+
+    def _critique_findings(self, findings: list[dict]) -> list[dict]:
+        """
+        Pass merged findings through the critic for citation verification.
+        Skipped when no vectorstore is attached — without a corpus, verify_citation
+        would reject every citation and potentially discard all findings.
+        """
+        if self.critic_agent.vectorstore is None:
+            return findings
+        return self.critic_agent.critique_findings(findings)
 
     def _weighted_score(self, results: list[dict]) -> float:
         score = sum(

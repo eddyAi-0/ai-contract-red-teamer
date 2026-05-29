@@ -6,6 +6,7 @@ from agents.base_agent import BaseAgent
 from agents.legal_agent import LegalAgent
 from agents.financial_agent import FinancialAgent
 from agents.practical_agent import PracticalAgent
+from agents.critic_agent import CriticAgent
 from orchestrator.orchestrator import Orchestrator
 
 
@@ -34,6 +35,30 @@ def _agent_payload(agent_type: str, risk_score: int, severity: str = "high") -> 
         ],
         "summary": f"{agent_type} summary",
     }
+
+
+def _mock_end_turn_response(text: str) -> MagicMock:
+    """Simulate a model response that terminates the agentic loop."""
+    m = MagicMock()
+    m.stop_reason = "end_turn"
+    block = MagicMock()
+    block.type = "text"
+    block.text = text
+    m.content = [block]
+    return m
+
+
+def _mock_tool_use_response(tool_name: str, tool_id: str, tool_input: dict) -> MagicMock:
+    """Simulate a model response that requests a tool call."""
+    m = MagicMock()
+    m.stop_reason = "tool_use"
+    block = MagicMock()
+    block.type = "tool_use"
+    block.id = tool_id
+    block.name = tool_name
+    block.input = tool_input
+    m.content = [block]
+    return m
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +211,190 @@ class TestPracticalAgent:
 
 
 # ---------------------------------------------------------------------------
+# Agentic loop — BaseAgent
+# ---------------------------------------------------------------------------
+
+class TestBaseAgentAgentic:
+    def _make_agent(self) -> tuple[BaseAgent, MagicMock]:
+        with patch("agents.base_agent.Anthropic") as MockClass:
+            mock_client = MagicMock()
+            MockClass.return_value = mock_client
+            agent = BaseAgent(system_prompt="test")
+        return agent, mock_client
+
+    def test_agentic_loop_terminates_at_first_turn(self):
+        """Model replies with end_turn immediately — single API call, correct output."""
+        payload = _agent_payload("legal", 7)
+        agent, mock_client = self._make_agent()
+        mock_client.messages.create.return_value = _mock_end_turn_response(
+            json.dumps(payload)
+        )
+
+        result = agent.analyze_agentic("contract text")
+
+        assert result["agent_type"] == "legal"
+        assert result["risk_score"] == 7
+        assert mock_client.messages.create.call_count == 1
+
+    def test_agentic_loop_with_one_tool_call(self):
+        """Model calls search_legal_corpus once, then returns final JSON."""
+        payload = _agent_payload("financial", 5)
+        agent, mock_client = self._make_agent()
+
+        mock_vs = MagicMock()
+        mock_vs.search.return_value = [
+            {"text": "Art. 7 consent", "source": "gdpr.pdf",
+             "chunk_index": 0, "distance": 0.1}
+        ]
+        agent.set_vectorstore(mock_vs)
+
+        mock_client.messages.create.side_effect = [
+            _mock_tool_use_response(
+                "search_legal_corpus", "tool_abc", {"query": "penalty clauses"}
+            ),
+            _mock_end_turn_response(json.dumps(payload)),
+        ]
+
+        result = agent.analyze_agentic("contract text")
+
+        assert result["risk_score"] == 5
+        assert mock_client.messages.create.call_count == 2
+        # Second call should include a tool_result user message
+        second_call_messages = mock_client.messages.create.call_args_list[1][1]["messages"]
+        assert any(
+            isinstance(m.get("content"), list)
+            and m["content"][0].get("type") == "tool_result"
+            for m in second_call_messages
+        )
+
+    def test_verify_citation_returns_false_for_unmatched_excerpt(self):
+        """An excerpt unrelated to any corpus chunk produces verified=False."""
+        agent, _ = self._make_agent()
+
+        mock_vs = MagicMock()
+        mock_vs.search.return_value = [
+            {"text": "Article 7 conditions for consent under GDPR",
+             "source": "gdpr.pdf", "chunk_index": 0, "distance": 0.5}
+        ]
+        agent.set_vectorstore(mock_vs)
+
+        result = agent._verify_citation(
+            "completely fabricated text that does not match anything in corpus"
+        )
+        assert result == {"verified": False}
+
+    def test_verify_citation_returns_true_for_matched_excerpt(self):
+        """An excerpt that appears verbatim in a corpus chunk produces verified=True."""
+        agent, _ = self._make_agent()
+
+        mock_vs = MagicMock()
+        mock_vs.search.return_value = [
+            {"text": "Article 7 conditions for consent under GDPR",
+             "source": "gdpr.pdf", "chunk_index": 0, "distance": 0.05}
+        ]
+        agent.set_vectorstore(mock_vs)
+
+        result = agent._verify_citation("Article 7 conditions for consent under GDPR")
+        assert result == {"verified": True}
+
+    def test_agentic_loop_reaches_max_turns_without_crash(self):
+        """When the model never stops, the loop exhausts and falls back to RAG."""
+        agent, mock_client = self._make_agent()
+        # Always respond with a tool_use to force loop exhaustion
+        mock_client.messages.create.return_value = _mock_tool_use_response(
+            "search_legal_corpus", "tool_x", {"query": "query"}
+        )
+        fallback_payload = _agent_payload("legal", 3)
+        agent.analyze_structured_with_rag = MagicMock(return_value=fallback_payload)
+
+        result = agent.analyze_agentic("contract text", max_turns=2)
+
+        assert result == fallback_payload
+        assert mock_client.messages.create.call_count == 2
+        agent.analyze_structured_with_rag.assert_called_once_with("contract text")
+
+
+# ---------------------------------------------------------------------------
+# CriticAgent
+# ---------------------------------------------------------------------------
+
+class TestCriticAgent:
+    def _make_critic(self) -> tuple[CriticAgent, MagicMock]:
+        with patch("agents.base_agent.Anthropic") as MockClass:
+            mock_client = MagicMock()
+            MockClass.return_value = mock_client
+            agent = CriticAgent()
+        return agent, mock_client
+
+    def test_system_prompt_covers_verification_keywords(self):
+        with patch("agents.base_agent.Anthropic"):
+            agent = CriticAgent()
+        prompt = agent.system_prompt.lower()
+        assert any(kw in prompt for kw in ["verify", "citation", "discard", "unverified"])
+
+    def test_critique_findings_returns_empty_list_unchanged(self):
+        """Empty input bypasses the API call entirely."""
+        critic, mock_client = self._make_critic()
+        result = critic.critique_findings([])
+        assert result == []
+        mock_client.messages.create.assert_not_called()
+
+    def test_critique_findings_terminates_at_first_turn(self):
+        """Model returns cleaned findings immediately (no tool calls)."""
+        critic, mock_client = self._make_critic()
+        cleaned = [{"title": "verified finding", "severity": "high"}]
+        mock_client.messages.create.return_value = _mock_end_turn_response(
+            json.dumps(cleaned)
+        )
+
+        result = critic.critique_findings([{"title": "original", "severity": "high"}])
+
+        assert result == cleaned
+        assert mock_client.messages.create.call_count == 1
+
+    def test_critique_findings_with_one_tool_call(self):
+        """Model calls verify_citation once, then returns cleaned list."""
+        critic, mock_client = self._make_critic()
+
+        mock_vs = MagicMock()
+        mock_vs.search.return_value = [
+            {"text": "Article 7 consent", "source": "gdpr.pdf",
+             "chunk_index": 0, "distance": 0.1}
+        ]
+        critic.set_vectorstore(mock_vs)
+
+        cleaned = [{"title": "verified finding", "severity": "medium"}]
+        mock_client.messages.create.side_effect = [
+            _mock_tool_use_response(
+                "verify_citation", "tool_v1",
+                {"excerpt": "Article 7 consent"}
+            ),
+            _mock_end_turn_response(json.dumps(cleaned)),
+        ]
+
+        result = critic.critique_findings(
+            [{"title": "original", "severity": "medium",
+              "legal_citations": [{"source": "gdpr.pdf", "excerpt": "Article 7 consent"}]}]
+        )
+
+        assert result == cleaned
+        assert mock_client.messages.create.call_count == 2
+
+    def test_critique_findings_falls_back_on_max_turns(self):
+        """If the loop exhausts without a final JSON, original findings are returned."""
+        original = [{"title": "finding", "severity": "low"}]
+        critic, mock_client = self._make_critic()
+        mock_client.messages.create.return_value = _mock_tool_use_response(
+            "verify_citation", "tool_v2", {"excerpt": "x"}
+        )
+
+        result = critic.critique_findings(original, max_turns=2)
+
+        assert result == original
+        assert mock_client.messages.create.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -195,17 +404,21 @@ def _make_orchestrator(legal_score=7, financial_score=5, practical_score=4) -> O
         orch = Orchestrator()
 
     orch.legal_agent = MagicMock()
-    orch.legal_agent.analyze_structured.return_value = _agent_payload("legal", legal_score, "high")
+    orch.legal_agent.analyze_agentic.return_value = _agent_payload("legal", legal_score, "high")
 
     orch.financial_agent = MagicMock()
-    orch.financial_agent.analyze_structured.return_value = _agent_payload(
+    orch.financial_agent.analyze_agentic.return_value = _agent_payload(
         "financial", financial_score, "critical"
     )
 
     orch.practical_agent = MagicMock()
-    orch.practical_agent.analyze_structured.return_value = _agent_payload(
+    orch.practical_agent.analyze_agentic.return_value = _agent_payload(
         "practical", practical_score, "low"
     )
+
+    # Critic: no vectorstore → _critique_findings is a pass-through
+    orch.critic_agent = MagicMock()
+    orch.critic_agent.vectorstore = None
 
     orch.client = MagicMock()
     orch.client.messages.create.return_value = _mock_response("Executive summary text.")
@@ -216,9 +429,9 @@ class TestOrchestrator:
     def test_calls_all_three_agents(self):
         orch = _make_orchestrator()
         orch.analyze("contract")
-        orch.legal_agent.analyze_structured.assert_called_once_with("contract")
-        orch.financial_agent.analyze_structured.assert_called_once_with("contract")
-        orch.practical_agent.analyze_structured.assert_called_once_with("contract")
+        orch.legal_agent.analyze_agentic.assert_called_once_with("contract")
+        orch.financial_agent.analyze_agentic.assert_called_once_with("contract")
+        orch.practical_agent.analyze_agentic.assert_called_once_with("contract")
 
     def test_report_has_expected_keys(self):
         orch = _make_orchestrator()
@@ -273,13 +486,37 @@ class TestOrchestrator:
         result = orch.analyze("contract")
         assert result["findings_count"] == len(result["total_findings"])
 
+    def test_critique_findings_called_after_merge(self):
+        """_critique_findings must receive the merged findings and its output reaches report."""
+        orch = _make_orchestrator()
+        reduced = [{"title": "only surviving finding", "severity": "high",
+                    "source_agent": "legal"}]
+        # Attach a real vectorstore so _critique_findings actually calls the critic
+        mock_vs = MagicMock()
+        orch.critic_agent.vectorstore = mock_vs
+        orch.critic_agent.critique_findings.return_value = reduced
+
+        result = orch.analyze("contract")
+
+        orch.critic_agent.critique_findings.assert_called_once()
+        assert result["total_findings"] == reduced
+        assert result["findings_count"] == 1
+
+    def test_critique_skipped_when_no_vectorstore(self):
+        """Without a corpus, _critique_findings is a no-op."""
+        orch = _make_orchestrator()
+        # critic_agent.vectorstore is already None in _make_orchestrator
+        result = orch.analyze("contract")
+        orch.critic_agent.critique_findings.assert_not_called()
+        assert result["findings_count"] == 3  # all three agent findings retained
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator + VectorStore integration
 # ---------------------------------------------------------------------------
 
 class TestOrchestratorRAG:
-    def test_vectorstore_injected_into_all_agents(self):
+    def test_vectorstore_injected_into_all_agents_including_critic(self):
         mock_vs = MagicMock()
         with patch("agents.base_agent.Anthropic"), patch("orchestrator.orchestrator.Anthropic"):
             orch = Orchestrator(vectorstore=mock_vs)
@@ -287,41 +524,49 @@ class TestOrchestratorRAG:
         assert orch.legal_agent.vectorstore is mock_vs
         assert orch.financial_agent.vectorstore is mock_vs
         assert orch.practical_agent.vectorstore is mock_vs
+        assert orch.critic_agent.vectorstore is mock_vs
 
-    def test_analyze_calls_rag_method_when_vectorstore_provided(self):
+    def test_analyze_calls_agentic_method_with_vectorstore(self):
         mock_vs = MagicMock()
         with patch("agents.base_agent.Anthropic"), patch("orchestrator.orchestrator.Anthropic"):
             orch = Orchestrator(vectorstore=mock_vs)
 
         orch.legal_agent = MagicMock()
-        orch.legal_agent.analyze_structured_with_rag.return_value = _agent_payload("legal", 6)
+        orch.legal_agent.analyze_agentic.return_value = _agent_payload("legal", 6)
         orch.financial_agent = MagicMock()
-        orch.financial_agent.analyze_structured_with_rag.return_value = _agent_payload("financial", 4)
+        orch.financial_agent.analyze_agentic.return_value = _agent_payload("financial", 4)
         orch.practical_agent = MagicMock()
-        orch.practical_agent.analyze_structured_with_rag.return_value = _agent_payload("practical", 3)
+        orch.practical_agent.analyze_agentic.return_value = _agent_payload("practical", 3)
+        orch.critic_agent = MagicMock()
+        orch.critic_agent.vectorstore = None  # skip critique in this test
         orch.client = MagicMock()
         orch.client.messages.create.return_value = _mock_response("Summary.")
 
         orch.analyze("contract text")
 
-        orch.legal_agent.analyze_structured_with_rag.assert_called_once_with("contract text")
-        orch.financial_agent.analyze_structured_with_rag.assert_called_once_with("contract text")
-        orch.practical_agent.analyze_structured_with_rag.assert_called_once_with("contract text")
+        orch.legal_agent.analyze_agentic.assert_called_once_with("contract text")
+        orch.financial_agent.analyze_agentic.assert_called_once_with("contract text")
+        orch.practical_agent.analyze_agentic.assert_called_once_with("contract text")
 
-    def test_analyze_uses_plain_structured_when_no_vectorstore(self):
+    def test_analyze_calls_agentic_without_vectorstore(self):
+        """analyze_agentic is used regardless of whether a vectorstore is present."""
         with patch("agents.base_agent.Anthropic"), patch("orchestrator.orchestrator.Anthropic"):
             orch = Orchestrator()  # no vectorstore
 
         orch.legal_agent = MagicMock()
-        orch.legal_agent.analyze_structured.return_value = _agent_payload("legal", 5)
+        orch.legal_agent.analyze_agentic.return_value = _agent_payload("legal", 5)
         orch.financial_agent = MagicMock()
-        orch.financial_agent.analyze_structured.return_value = _agent_payload("financial", 3)
+        orch.financial_agent.analyze_agentic.return_value = _agent_payload("financial", 3)
         orch.practical_agent = MagicMock()
-        orch.practical_agent.analyze_structured.return_value = _agent_payload("practical", 2)
+        orch.practical_agent.analyze_agentic.return_value = _agent_payload("practical", 2)
+        orch.critic_agent = MagicMock()
+        orch.critic_agent.vectorstore = None
         orch.client = MagicMock()
         orch.client.messages.create.return_value = _mock_response("Summary.")
 
         orch.analyze("contract text")
 
-        orch.legal_agent.analyze_structured.assert_called_once_with("contract text")
+        orch.legal_agent.analyze_agentic.assert_called_once_with("contract text")
+        # Old single-pass methods should NOT be called directly by the orchestrator
+        orch.legal_agent.analyze_structured.assert_not_called()
         orch.legal_agent.analyze_structured_with_rag.assert_not_called()
