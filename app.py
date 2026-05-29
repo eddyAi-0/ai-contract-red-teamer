@@ -15,6 +15,17 @@ load_dotenv()
 
 GITHUB_URL = "https://github.com/eddyAi-0/ai-contract-red-teamer"
 
+DISCLAIMER = (
+    "⚠️ **This tool is not legal advice.** It is an automated, AI-generated risk "
+    "assessment that may contain errors or omissions. Always consult a qualified "
+    "lawyer before signing any contract or making decisions based on this report."
+)
+
+
+def render_disclaimer() -> None:
+    """Show the 'not legal advice' notice. Used on the landing page and the report."""
+    st.warning(DISCLAIMER)
+
 CONTRATTO_ESEMPIO = """
 CONTRATTO DI ABBONAMENTO SERVIZI CLOUD
 
@@ -99,23 +110,23 @@ def _safe_vectorstore() -> "VectorStore | None":
 
 def render_sidebar() -> None:
     with st.sidebar:
-        st.markdown("## ⚖️ AI Contract\nRed-Teamer")
+        st.markdown("## AI Contract Red-Teamer")
         st.markdown(
             "Upload a PDF contract. Three AI agents analyze it in sequence "
             "and produce a risk report with score **0–10**."
         )
-        st.markdown(f"[📦 GitHub]({GITHUB_URL})", unsafe_allow_html=False)
+        st.markdown(f"[GitHub]({GITHUB_URL})", unsafe_allow_html=False)
 
         gdpr_path = Path(__file__).parent / "rag" / "documents" / "CELEX_32016R0679_EN_TXT.pdf"
         if gdpr_path.exists():
             vs = _safe_vectorstore()
             rag_label = "✅ RAG active" if vs else "⚠️ RAG not indexed"
             st.markdown("---")
-            st.caption(f"📄 GDPR (EU Reg. 2016/679)\n{rag_label}")
+            st.caption(f"GDPR (EU Reg. 2016/679)\n{rag_label}")
 
         if "report" in st.session_state:
             st.markdown("---")
-            if st.button("🔄 New analysis", use_container_width=True):
+            if st.button("New analysis", use_container_width=True):
                 for key in ("report", "analyzing", "contract_text"):
                     st.session_state.pop(key, None)
                 st.rerun()
@@ -126,12 +137,14 @@ def render_sidebar() -> None:
 # ---------------------------------------------------------------------------
 
 def render_upload_state() -> None:
-    st.title("⚖️ AI Contract Red-Teamer")
+    st.title("AI Contract Red-Teamer")
     st.markdown(
         "Upload a **PDF** contract or Terms of Service. "
         "Three specialized agents identify dangerous clauses, "
         "ambiguities, and hidden traps — before you sign."
     )
+
+    render_disclaimer()
 
     missing = [k for k in ("ANTHROPIC_API_KEY",) if not os.getenv(k)]
     if missing:
@@ -142,7 +155,7 @@ def render_upload_state() -> None:
         return
 
     st.markdown("---")
-    tab_pdf, tab_sample = st.tabs(["📄 Upload PDF", "📋 Sample contract"])
+    tab_pdf, tab_sample = st.tabs(["Upload PDF", "Sample contract"])
 
     with tab_pdf:
         uploaded = st.file_uploader(
@@ -155,11 +168,11 @@ def render_upload_state() -> None:
             st.caption(f"Selected file: **{uploaded.name}** ({uploaded.size // 1024} KB)")
 
         st.info(
-            "ℹ️ Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.",
+            "Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.",
         )
 
         if st.button(
-            "🔍 Analyze contract",
+            "Analyze contract",
             type="primary",
             disabled=uploaded is None,
             use_container_width=True,
@@ -180,7 +193,7 @@ def render_upload_state() -> None:
                 return
 
             if was_truncated:
-                st.info("ℹ️ Long document: analyzed the first 25,000 characters (~7 pages)")
+                st.info("Long document: analyzed the first 25,000 characters (~7 pages)")
 
             _start_analysis(text)
 
@@ -192,9 +205,9 @@ def render_upload_state() -> None:
         with st.expander("Show sample contract text"):
             st.code(CONTRATTO_ESEMPIO.strip(), language="text")
 
-        st.info("ℹ️ Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.")
+        st.info("Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.")
 
-        if st.button("🔍 Analyze sample contract", type="primary", use_container_width=True):
+        if st.button("Analyze sample contract", type="primary", use_container_width=True):
             _start_analysis(CONTRATTO_ESEMPIO)
 
 
@@ -215,7 +228,7 @@ def render_analyzing_state() -> None:
         st.rerun()
         return
 
-    st.title("🔍 Analyzing...")
+    st.title("Analyzing...")
     st.markdown("Agents are reviewing the contract. Please do not close this page.")
 
     progress = st.progress(0)
@@ -308,7 +321,8 @@ def main() -> None:
     render_sidebar()
 
     if "report" in st.session_state:
-        st.title("📋 Contract Analysis Report")
+        st.title("Contract Analysis Report")
+        render_disclaimer()
         render_report(st.session_state.report)
     elif st.session_state.get("analyzing"):
         render_analyzing_state()

@@ -8,6 +8,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Pinned, dated model version for reproducible runs.
+DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+
 _JSON_INSTRUCTION = (
     "\n\nRespond ONLY with a valid JSON object. "
     "No markdown, no code fences, no preamble. "
@@ -31,7 +34,7 @@ class BaseAgent:
     Each subclass provides its own system_prompt; this class owns the API call.
     """
 
-    def __init__(self, system_prompt: str, model: str = "claude-sonnet-4-5"):
+    def __init__(self, system_prompt: str, model: str = DEFAULT_MODEL):
         self.client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         self.system_prompt = system_prompt
         self.model = model
@@ -214,25 +217,55 @@ class BaseAgent:
 
     def _verify_citation(self, excerpt: str) -> dict:
         """
-        Return {"verified": True} if excerpt is found in the corpus via normalised
-        substring match or SequenceMatcher ratio ≥ 0.85; False otherwise.
+        Return {"verified": True} if excerpt is found in a retrieved corpus chunk,
+        {"verified": False} otherwise.
 
-        Using fuzzy matching because models sometimes paraphrase quotes slightly.
-        The 0.85 threshold rejects fabrications while tolerating minor whitespace /
-        punctuation differences.
+        Two-stage match against each candidate chunk (whitespace/case normalised):
+        1. Fast-path: exact substring containment.
+        2. Fuzzy: slide a window over the chunk the same word-length as the excerpt
+           and take the best SequenceMatcher ratio across those windows. Comparing
+           against same-length windows (rather than the whole chunk) is what makes
+           the fuzzy stage work: a short excerpt vs. an 800-char chunk would always
+           score near zero, so the threshold could never be met. The 0.85 threshold
+           rejects fabrications while tolerating minor paraphrasing / punctuation.
         """
         if self.vectorstore is None:
             return {"verified": False}
-        candidates = self.vectorstore.search(excerpt, top_k=3)
         normalised_excerpt = " ".join(excerpt.lower().split())
+        if not normalised_excerpt:
+            return {"verified": False}
+
+        candidates = self.vectorstore.search(excerpt, top_k=3)
         for candidate in candidates:
             normalised_text = " ".join(candidate["text"].lower().split())
             if normalised_excerpt in normalised_text:
                 return {"verified": True}
-            ratio = SequenceMatcher(None, normalised_excerpt, normalised_text).ratio()
-            if ratio >= 0.85:
+            if self._best_window_ratio(normalised_excerpt, normalised_text) >= 0.85:
                 return {"verified": True}
         return {"verified": False}
+
+    @staticmethod
+    def _best_window_ratio(excerpt: str, text: str) -> float:
+        """
+        Best SequenceMatcher ratio between `excerpt` and every word-window of `text`
+        whose length (in words) equals the excerpt's. Both inputs are pre-normalised.
+        If the text is shorter than the excerpt window, compare against the whole text.
+        """
+        excerpt_words = excerpt.split()
+        text_words = text.split()
+        window = len(excerpt_words)
+        if window == 0 or len(text_words) <= window:
+            return SequenceMatcher(None, excerpt, text).ratio()
+
+        best = 0.0
+        for start in range(len(text_words) - window + 1):
+            candidate = " ".join(text_words[start:start + window])
+            ratio = SequenceMatcher(None, excerpt, candidate).ratio()
+            if ratio > best:
+                best = ratio
+                if best == 1.0:
+                    break
+        return best
 
     # ------------------------------------------------------------------
     # Private helpers

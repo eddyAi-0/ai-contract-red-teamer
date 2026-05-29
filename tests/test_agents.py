@@ -74,7 +74,7 @@ class TestBaseAgent:
     def test_default_model(self):
         with patch("agents.base_agent.Anthropic"):
             agent = BaseAgent(system_prompt="test")
-        assert agent.model == "claude-sonnet-4-5"
+        assert agent.model == "claude-sonnet-4-5-20250929"
 
     def test_analyze_returns_text(self):
         with patch("agents.base_agent.Anthropic") as MockAnthropicClass:
@@ -296,6 +296,54 @@ class TestBaseAgentAgentic:
 
         result = agent._verify_citation("Article 7 conditions for consent under GDPR")
         assert result == {"verified": True}
+
+    # The following three tests target the windowed fuzzy match: a short excerpt is
+    # checked against same-length windows of a long chunk, not the whole chunk.
+
+    _LONG_CHUNK = (
+        "Article 7 Conditions for consent. Where processing is based on consent, the "
+        "controller shall be able to demonstrate that the data subject has consented to "
+        "processing of his or her personal data. If the data subject's consent is given "
+        "in the context of a written declaration which also concerns other matters, the "
+        "request for consent shall be presented in a manner which is clearly "
+        "distinguishable from the other matters, in an intelligible and easily "
+        "accessible form, using clear and plain language."
+    )
+
+    def _agent_with_chunk(self, chunk_text: str) -> BaseAgent:
+        agent, _ = self._make_agent()
+        mock_vs = MagicMock()
+        mock_vs.search.return_value = [
+            {"text": chunk_text, "source": "gdpr.pdf", "chunk_index": 0, "distance": 0.1}
+        ]
+        agent.set_vectorstore(mock_vs)
+        return agent
+
+    def test_verify_citation_verbatim_substring_in_long_chunk(self):
+        """An exact substring of a long chunk is verified via the substring fast-path."""
+        agent = self._agent_with_chunk(self._LONG_CHUNK)
+        result = agent._verify_citation(
+            "the controller shall be able to demonstrate that the data subject has consented"
+        )
+        assert result == {"verified": True}
+
+    def test_verify_citation_near_paraphrase_in_long_chunk(self):
+        """A lightly paraphrased excerpt matches a window of the long chunk (fuzzy stage)."""
+        agent = self._agent_with_chunk(self._LONG_CHUNK)
+        # Minor differences: "is able to" vs "shall be able to", dropped "or her".
+        result = agent._verify_citation(
+            "the controller shall be able to demonstrate that the data subject has consented "
+            "to processing of his personal data"
+        )
+        assert result == {"verified": True}
+
+    def test_verify_citation_fabricated_excerpt_against_long_chunk(self):
+        """A fabricated excerpt scores below threshold on every window → not verified."""
+        agent = self._agent_with_chunk(self._LONG_CHUNK)
+        result = agent._verify_citation(
+            "the vendor may unilaterally terminate this agreement without any prior notice"
+        )
+        assert result == {"verified": False}
 
     def test_agentic_loop_reaches_max_turns_without_crash(self):
         """When the model never stops, the loop exhausts and falls back to RAG."""

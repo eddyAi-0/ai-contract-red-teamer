@@ -2,6 +2,7 @@ import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from agents.base_agent import DEFAULT_MODEL
 from agents.legal_agent import LegalAgent
 from agents.financial_agent import FinancialAgent
 from agents.practical_agent import PracticalAgent
@@ -99,7 +100,7 @@ class Orchestrator:
             for r in results
         )
         response = self.client.messages.create(
-            model="claude-sonnet-4-5",
+            model=DEFAULT_MODEL,
             max_tokens=512,
             system=_EXECUTIVE_SUMMARY_SYSTEM,
             messages=[
