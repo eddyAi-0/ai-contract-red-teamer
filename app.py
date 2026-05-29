@@ -168,7 +168,7 @@ def render_upload_state() -> None:
             st.caption(f"Selected file: **{uploaded.name}** ({uploaded.size // 1024} KB)")
 
         st.info(
-            "Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.",
+            "Analysis takes ~TODO seconds and costs ~$TODO in API calls.",
         )
 
         if st.button(
@@ -205,7 +205,7 @@ def render_upload_state() -> None:
         with st.expander("Show sample contract text"):
             st.code(CONTRATTO_ESEMPIO.strip(), language="text")
 
-        st.info("Analysis takes ~30–60 seconds and costs ~$0.10 in API calls.")
+        st.info("Analysis takes ~TODO seconds and costs ~$TODO in API calls.")
 
         if st.button("Analyze sample contract", type="primary", use_container_width=True):
             _start_analysis(CONTRATTO_ESEMPIO)
@@ -218,7 +218,7 @@ def _start_analysis(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Analyzing state — runs agents sequentially with live progress
+# Analyzing state — runs each agent's agentic loop, then the critic, with live progress
 # ---------------------------------------------------------------------------
 
 def render_analyzing_state() -> None:
@@ -237,6 +237,7 @@ def render_analyzing_state() -> None:
     p_legal   = st.empty()
     p_fin     = st.empty()
     p_prac    = st.empty()
+    p_critic  = st.empty()
     p_summary = st.empty()
 
     p_text.markdown("✅ Text extracted")
@@ -247,9 +248,10 @@ def render_analyzing_state() -> None:
         st.caption("⚠️ RAG unavailable — analysis without GDPR normative references.")
 
     def analyze(agent):
-        if vs:
-            return agent.analyze_structured_with_rag(contract_text)
-        return agent.analyze_structured(contract_text)
+        # analyze_agentic runs the tool-use loop; it already falls back to
+        # single-pass RAG internally when no vectorstore is set, so calling it
+        # unconditionally is safe.
+        return agent.analyze_agentic(contract_text)
 
     try:
         orchestrator = Orchestrator(vectorstore=vs)
@@ -275,10 +277,16 @@ def render_analyzing_state() -> None:
         )
         progress.progress(85)
 
-        p_summary.markdown("⏳ **Orchestrator** — generating executive summary...")
         results = [legal, financial, practical]
-        overall = orchestrator._weighted_score(results)
         findings = orchestrator._merge_findings(results)
+
+        p_critic.markdown("⏳ **Critic** — verifying citations...")
+        findings = orchestrator._critique_findings(findings)
+        p_critic.markdown("✅ **Critic** done — citations verified")
+        progress.progress(92)
+
+        p_summary.markdown("⏳ **Orchestrator** — generating executive summary...")
+        overall = orchestrator._weighted_score(results)
         summary = orchestrator._executive_summary(results, overall)
 
         report = {
